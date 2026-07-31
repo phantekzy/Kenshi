@@ -6,12 +6,19 @@ pub enum SortMode {
     Name,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ViewMode {
+    List,
+    Map,
+}
+
 pub struct App {
     pub root: DirNode,
     pub nav_stack: Vec<usize>,
     selected_stack: Vec<usize>,
     pub selected: usize,
     pub sort_mode: SortMode,
+    pub view_mode: ViewMode,
     pub status: Option<String>,
 }
 
@@ -23,6 +30,7 @@ impl App {
             selected_stack: Vec::new(),
             selected: 0,
             sort_mode: SortMode::Size,
+            view_mode: ViewMode::List,
             status: None,
         }
     }
@@ -109,5 +117,12 @@ impl App {
             SortMode::Name => node.sort_by_name(),
         }
         self.selected = 0;
+    }
+
+    pub fn toggle_view(&mut self) {
+        self.view_mode = match self.view_mode {
+            ViewMode::List => ViewMode::Map,
+            ViewMode::Map => ViewMode::List,
+        };
     }
 }
