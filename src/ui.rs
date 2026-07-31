@@ -35,7 +35,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         format_size(node.size, DECIMAL)
     );
     let title = format!(
-        " wiztree-rs — disk usage ({}) ",
+        " Kenshi by phantekzy — disk usage ({}) ",
         match app.sort_mode {
             crate::app::SortMode::Size => "sorted by size",
             crate::app::SortMode::Name => "sorted by name",
