@@ -83,8 +83,7 @@ impl App {
         if self.selected >= node.children.len() {
             return;
         }
-        if !node.children[self.selected].is_dir || node.children[self.selected].children.is_empty()
-        {
+        if !node.children[self.selected].is_dir {
             return;
         }
         self.selected_stack.push(self.selected);
@@ -109,5 +108,6 @@ impl App {
             SortMode::Size => node.sort_by_size(),
             SortMode::Name => node.sort_by_name(),
         }
+        self.selected = 0;
     }
 }
