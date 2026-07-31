@@ -1,0 +1,113 @@
+use crate::tree::DirNode;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SortMode {
+    Size,
+    Name,
+}
+
+pub struct App {
+    pub root: DirNode,
+    pub nav_stack: Vec<usize>,
+    selected_stack: Vec<usize>,
+    pub selected: usize,
+    pub sort_mode: SortMode,
+    pub status: Option<String>,
+}
+
+impl App {
+    pub fn new(root: DirNode) -> Self {
+        Self {
+            root,
+            nav_stack: Vec::new(),
+            selected_stack: Vec::new(),
+            selected: 0,
+            sort_mode: SortMode::Size,
+            status: None,
+        }
+    }
+
+    pub fn current_node(&self) -> &DirNode {
+        let mut node = &self.root;
+        for &i in &self.nav_stack {
+            node = &node.children[i];
+        }
+        node
+    }
+
+    fn current_node_mut(&mut self) -> &mut DirNode {
+        let mut node = &mut self.root;
+        for &i in &self.nav_stack {
+            node = &mut node.children[i];
+        }
+        node
+    }
+
+    pub fn breadcrumb(&self) -> String {
+        let mut node = &self.root;
+        let mut parts = vec![node.name.clone()];
+        for &i in &self.nav_stack {
+            node = &node.children[i];
+            parts.push(node.name.clone());
+        }
+        parts.join(" / ")
+    }
+
+    pub fn move_down(&mut self) {
+        let len = self.current_node().children.len();
+        if len > 0 && self.selected + 1 < len {
+            self.selected += 1;
+        }
+    }
+
+    pub fn move_up(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+        }
+    }
+
+    pub fn page_down(&mut self, page: usize) {
+        let len = self.current_node().children.len();
+        if len == 0 {
+            return;
+        }
+        self.selected = (self.selected + page).min(len - 1);
+    }
+
+    pub fn page_up(&mut self, page: usize) {
+        self.selected = self.selected.saturating_sub(page);
+    }
+
+    pub fn enter(&mut self) {
+        let node = self.current_node();
+        if self.selected >= node.children.len() {
+            return;
+        }
+        if !node.children[self.selected].is_dir || node.children[self.selected].children.is_empty()
+        {
+            return;
+        }
+        self.selected_stack.push(self.selected);
+        self.nav_stack.push(self.selected);
+        self.selected = 0;
+    }
+
+    pub fn back(&mut self) {
+        if self.nav_stack.pop().is_some() {
+            self.selected = self.selected_stack.pop().unwrap_or(0);
+        }
+    }
+
+    pub fn toggle_sort(&mut self) {
+        self.sort_mode = match self.sort_mode {
+            SortMode::Size => SortMode::Name,
+            SortMode::Name => SortMode::Size,
+        };
+        let mode = self.sort_mode;
+        let node = self.current_node_mut();
+        match mode {
+            SortMode::Size => node.sort_by_size(),
+            SortMode::Name => node.sort_by_name(),
+        }
+    }
+}
