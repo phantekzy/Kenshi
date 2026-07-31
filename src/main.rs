@@ -95,6 +95,7 @@ fn run(
                     KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => app.enter(),
                     KeyCode::Backspace | KeyCode::Left | KeyCode::Char('h') => app.back(),
                     KeyCode::Char('s') => app.toggle_sort(),
+                    KeyCode::Char('m') | KeyCode::Tab => app.toggle_view(),
                     KeyCode::Char('r') => {
                         app.status = Some("rescanning...".to_string());
                         terminal.draw(|f| ui::draw(f, app, &mut list_state))?;
