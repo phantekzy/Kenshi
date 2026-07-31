@@ -1,5 +1,6 @@
 mod app;
 mod tree;
+mod treemap;
 mod ui;
 
 use app::App;
