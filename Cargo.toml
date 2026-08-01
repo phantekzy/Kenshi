@@ -1,9 +1,9 @@
 [package]
-name = "kenshi"
+name = "kenshii"
 version = "0.2.0"
 edition = "2021"
 authors = ["Maini Lotfi Abdelkader <mainilotfi@gmail.com>"]
-description = "Disk usage analyzer written in Rust"
+description = "A blazing-fast terminal disk usage analyzer with nested treemaps"
 repository = "https://github.com/phantekzy/kenshi"
 license = "MIT"
 readme = "README.md"
@@ -11,7 +11,7 @@ keywords = ["cli", "disk-usage", "terminal", "tui", "analyzer"]
 categories = ["command-line-utilities"]
 
 [[bin]]
-name = "kenshi"
+name = "kenshii"
 path = "src/main.rs"
 
 [profile.release]
