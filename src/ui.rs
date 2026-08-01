@@ -9,6 +9,8 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
 };
+use std::collections::HashMap;
+use std::time::SystemTime;
 
 const BAR_WIDTH: usize = 20;
 
@@ -25,14 +27,16 @@ pub fn draw(f: &mut Frame, app: &App, list_state: &mut ListState) {
 
     draw_header(f, app, outer[0]);
 
-    // List on top, treemap docked underneath it — same arrangement WizTree uses.
     let panels = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
         .split(outer[1]);
 
     draw_list(f, app, panels[0], list_state);
-    draw_map(f, app, panels[1]);
+    match app.bottom_panel {
+        crate::app::BottomPanel::Map => draw_map(f, app, panels[1]),
+        crate::app::BottomPanel::Types => draw_types(f, app, panels[1]),
+    }
 
     draw_footer(f, app, outer[2]);
 }
@@ -50,6 +54,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         match app.sort_mode {
             crate::app::SortMode::Size => "sorted by size",
             crate::app::SortMode::Name => "sorted by name",
+            crate::app::SortMode::Modified => "sorted by date modified",
         }
     );
     let p = Paragraph::new(text).block(Block::default().borders(Borders::ALL).title(title));
@@ -104,6 +109,10 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect, list_state: &mut ListState) {
                     format!("{:>10} ", format_size(c.size, DECIMAL)),
                     Style::default().fg(Color::Green),
                 ),
+                Span::styled(
+                    format!("{:>9} ", format_ago(c.modified)),
+                    Style::default().fg(Color::Magenta),
+                ),
                 Span::styled(format!("[{}] ", icon), Style::default().fg(color)),
                 Span::styled(c.name.clone(), name_style),
             ]);
@@ -128,34 +137,19 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect, list_state: &mut ListState) {
     f.render_stateful_widget(list, area, list_state);
 }
 
-/// How many folder levels the map expands into automatically. Deeper than this,
-/// tiles just render as flat leaves — matches WizTree, which also stops
-/// subdividing once boxes get too small to be readable.
 const MAX_MAP_DEPTH: usize = 4;
 const MIN_RECURSE_WIDTH: u16 = 8;
 const MIN_RECURSE_HEIGHT: u16 = 4;
 
-/// One rectangle in the fully-expanded map: a file or a folder, at whatever
-/// nesting depth it landed at. `top_index` always points back to which
-/// top-level (currently listed) entry this tile ultimately belongs to, so
-/// the whole branch can be colored and selected consistently.
 struct Tile<'a> {
     node: &'a DirNode,
     rect: Rect,
     top_index: usize,
     depth: usize,
-    /// true if this folder's own children are drawn inside it (so its body
-    /// shouldn't also print a size label that they'd just paint over).
     expanded: bool,
-    /// This tile's share of its immediate containing folder's total size —
-    /// not of the whole scan, so nested tiles read the way WizTree's do.
     pct_of_parent: f64,
 }
 
-/// Recursively squarifies `children` into `area`, then — for any directory
-/// tile that's both big enough on screen and within `max_depth` — repeats the
-/// process one level deeper inside that tile's own borders. This is what
-/// makes the whole tree visible at once instead of just the current folder.
 fn layout_tiles<'a>(
     children: &'a [DirNode],
     area: Rect,
@@ -220,9 +214,6 @@ fn layout_tiles<'a>(
     }
 }
 
-/// WizTree-style nested treemap, docked under the list: the current directory's
-/// whole visible tree — files and subfolders, several levels deep — squarified
-/// and drawn all at once, with every tile labeled with its name and size.
 fn draw_map(f: &mut Frame, app: &App, area: Rect) {
     let node = app.current_node();
 
@@ -246,9 +237,6 @@ fn draw_map(f: &mut Frame, app: &App, area: Rect) {
     let mut tiles: Vec<Tile> = Vec::new();
     layout_tiles(&node.children, inner, 1, MAX_MAP_DEPTH, None, &mut tiles);
 
-    // Parents are always pushed before their own children in `tiles`, so
-    // painting in this order naturally layers nested boxes on top of their
-    // parent's fill instead of the other way around.
     for tile in &tiles {
         let rect = tile.rect;
         let selected = tile.depth == 1 && tile.top_index == app.selected;
@@ -295,8 +283,6 @@ fn draw_map(f: &mut Frame, app: &App, area: Rect) {
                 let mut lines: Vec<Line> = Vec::new();
 
                 if show_title {
-                    // Name, size and % already live in the title, so the body
-                    // is free for the extra stats there wasn't room for up there.
                     if tile.node.is_dir {
                         lines.push(Line::from(format!(
                             "{} item(s), {} file(s)",
@@ -307,8 +293,6 @@ fn draw_map(f: &mut Frame, app: &App, area: Rect) {
                         lines.push(Line::from(file_kind(&tile.node.name)));
                     }
                 } else {
-                    // No room for a title at all — the body has to carry
-                    // everything, one fact per line as height allows.
                     lines.push(Line::from(format!(
                         "{} {}",
                         tile.node.name,
@@ -352,10 +336,6 @@ fn draw_map(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-/// Cycles through a small palette so adjacent top-level branches are visually
-/// distinct, using a cooler palette for directories and a warmer one for
-/// files — same idea WizTree uses to separate folders from individual files
-/// at a glance.
 fn tile_color(top_index: usize, is_dir: bool) -> Color {
     const DIR_PALETTE: [Color; 6] = [
         Color::Rgb(40, 90, 160),
@@ -380,8 +360,6 @@ fn tile_color(top_index: usize, is_dir: bool) -> Color {
     }
 }
 
-/// Darkens a color slightly per nesting depth, so deeper tiles visibly recede
-/// while still reading as "part of" their parent's color family.
 fn shade(color: Color, depth: usize) -> Color {
     if let Color::Rgb(r, g, b) = color {
         let factor = 1.0 - ((depth.saturating_sub(1)) as f32 * 0.12).min(0.55);
@@ -395,8 +373,6 @@ fn shade(color: Color, depth: usize) -> Color {
     }
 }
 
-/// Inserts thousands separators into a plain integer, e.g. 12345 -> "12,345".
-/// A tiny hand-rolled formatter so we don't need an extra crate just for this.
 fn format_count(n: u64) -> String {
     let digits = n.to_string();
     let bytes = digits.as_bytes();
@@ -410,8 +386,6 @@ fn format_count(n: u64) -> String {
     out
 }
 
-/// A short human label for a file tile's body — its extension if it has one,
-/// otherwise a generic fallback.
 fn file_kind(name: &str) -> String {
     match std::path::Path::new(name)
         .extension()
@@ -422,8 +396,130 @@ fn file_kind(name: &str) -> String {
     }
 }
 
+const MAX_TYPE_ROWS: usize = 200;
+
+fn collect_extension_stats(node: &DirNode, stats: &mut HashMap<String, (u64, u64)>) {
+    if node.is_dir {
+        for child in &node.children {
+            collect_extension_stats(child, stats);
+        }
+    } else {
+        let ext = std::path::Path::new(&node.name)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_uppercase())
+            .unwrap_or_else(|| "(no extension)".to_string());
+        let entry = stats.entry(ext).or_insert((0, 0));
+        entry.0 += node.size;
+        entry.1 += 1;
+    }
+}
+
+fn draw_types(f: &mut Frame, app: &App, area: Rect) {
+    let node = app.current_node();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("File Types (recursive breakdown of current folder)");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if node.children.is_empty() {
+        let msg = if node.readable {
+            "(empty directory)"
+        } else {
+            "(permission denied)"
+        };
+        let p = Paragraph::new(msg).style(Style::default().fg(Color::DarkGray));
+        f.render_widget(p, inner);
+        return;
+    }
+
+    let mut stats: HashMap<String, (u64, u64)> = HashMap::new();
+    collect_extension_stats(node, &mut stats);
+
+    if stats.is_empty() {
+        let p = Paragraph::new("(no files found)").style(Style::default().fg(Color::DarkGray));
+        f.render_widget(p, inner);
+        return;
+    }
+
+    let mut rows: Vec<(String, u64, u64)> = stats
+        .into_iter()
+        .map(|(ext, (size, count))| (ext, size, count))
+        .collect();
+    rows.sort_by(|a, b| b.1.cmp(&a.1));
+    rows.truncate(MAX_TYPE_ROWS);
+
+    let total: u64 = rows.iter().map(|r| r.1).sum::<u64>().max(1);
+
+    let items: Vec<ListItem> = rows
+        .iter()
+        .map(|(ext, size, count)| {
+            let pct = *size as f64 / total as f64 * 100.0;
+            let filled = ((pct / 100.0) * BAR_WIDTH as f64).round() as usize;
+            let filled = filled.min(BAR_WIDTH);
+            let bar = format!("{}{}", "#".repeat(filled), "-".repeat(BAR_WIDTH - filled));
+
+            let label = if ext == "(no extension)" {
+                ext.clone()
+            } else {
+                format!(".{}", ext.to_lowercase())
+            };
+
+            let line = Line::from(vec![
+                Span::styled(
+                    format!("{:>6.1}% ", pct),
+                    Style::default().fg(Color::Yellow),
+                ),
+                Span::styled(format!("[{}] ", bar), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{:>10} ", format_size(*size, DECIMAL)),
+                    Style::default().fg(Color::Green),
+                ),
+                Span::styled(
+                    format!("{:>9} file(s)  ", format_count(*count)),
+                    Style::default().fg(Color::Magenta),
+                ),
+                Span::styled(
+                    label,
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]);
+            ListItem::new(line)
+        })
+        .collect();
+
+    f.render_widget(List::new(items), inner);
+}
+
+fn format_ago(t: SystemTime) -> String {
+    match SystemTime::now().duration_since(t) {
+        Ok(d) => {
+            let secs = d.as_secs();
+            if secs < 60 {
+                "just now".to_string()
+            } else if secs < 3600 {
+                format!("{}m ago", secs / 60)
+            } else if secs < 86_400 {
+                format!("{}h ago", secs / 3600)
+            } else if secs < 86_400 * 30 {
+                format!("{}d ago", secs / 86_400)
+            } else if secs < 86_400 * 365 {
+                format!("{}mo ago", secs / (86_400 * 30))
+            } else {
+                format!("{}y ago", secs / (86_400 * 365))
+            }
+        }
+        Err(_) => "just now".to_string(),
+    }
+}
+
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
-    let base = "↑/↓ move   →/Enter open   ←/Backspace back   s sort   r rescan   q quit";
+    let base =
+        "↑/↓ move   →/Enter open   ←/Backspace back   s sort   t types/map   r rescan   q quit";
     let text = match &app.status {
         Some(s) => format!("{}   |   {}", base, s),
         None => base.to_string(),
