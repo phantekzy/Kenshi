@@ -2,6 +2,13 @@
 name = "kenshi"
 version = "0.2.0"
 edition = "2021"
+authors = ["Maini Lotfi Abdelkader <mainilotfi@gmail.com>"]
+description = "Disk usage analyzer written in Rust"
+repository = "https://github.com/phantekzy/kenshi"
+license = "MIT"
+readme = "README.md"
+keywords = ["cli", "disk-usage", "terminal", "tui", "analyzer"]
+categories = ["command-line-utilities"]
 
 [[bin]]
 name = "kenshi"
