@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
+use std::time::SystemTime;
 
 const MAX_PARALLEL_DEPTH: usize = 3;
 
@@ -16,6 +17,7 @@ pub struct DirNode {
     pub is_dir: bool,
     pub file_count: u64,
     pub readable: bool,
+    pub modified: SystemTime,
     pub children: Vec<DirNode>,
 }
 
@@ -34,6 +36,11 @@ impl DirNode {
 
         let is_symlink = meta.as_ref().map(|m| m.is_symlink()).unwrap_or(false);
         let is_dir = !is_symlink && path.is_dir();
+        let own_modified = meta
+            .as_ref()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .unwrap_or(SystemTime::UNIX_EPOCH);
 
         if is_dir {
             let entries: Vec<PathBuf> = match fs::read_dir(path) {
@@ -46,6 +53,7 @@ impl DirNode {
                         is_dir: true,
                         file_count: 0,
                         readable: false,
+                        modified: own_modified,
                         children: vec![],
                     };
                 }
@@ -58,6 +66,15 @@ impl DirNode {
                 .iter()
                 .map(|c| if c.is_dir { c.file_count } else { 1 })
                 .sum();
+            // A folder's "modified" is the most recent touch anywhere inside it
+            // (or its own timestamp if that's more recent) — the same "when did
+            // this last change" signal TreeSize/WizTree show for directories.
+            let modified = children
+                .iter()
+                .map(|c| c.modified)
+                .max()
+                .unwrap_or(own_modified)
+                .max(own_modified);
 
             let mut children = children;
             children.sort_by(|a, b| b.size.cmp(&a.size));
@@ -69,6 +86,7 @@ impl DirNode {
                 is_dir: true,
                 file_count,
                 readable: true,
+                modified,
                 children,
             }
         } else {
@@ -80,6 +98,7 @@ impl DirNode {
                 is_dir: false,
                 file_count: 1,
                 readable: true,
+                modified: own_modified,
                 children: vec![],
             }
         }
@@ -131,5 +150,9 @@ impl DirNode {
     pub fn sort_by_name(&mut self) {
         self.children
             .sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    }
+
+    pub fn sort_by_modified(&mut self) {
+        self.children.sort_by(|a, b| b.modified.cmp(&a.modified));
     }
 }
