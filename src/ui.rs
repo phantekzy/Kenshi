@@ -25,6 +25,7 @@ pub fn draw(f: &mut Frame, app: &App, list_state: &mut ListState) {
 
     draw_header(f, app, outer[0]);
 
+    // List on top, treemap docked underneath it — same arrangement WizTree uses.
     let panels = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
@@ -127,18 +128,34 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect, list_state: &mut ListState) {
     f.render_stateful_widget(list, area, list_state);
 }
 
+/// How many folder levels the map expands into automatically. Deeper than this,
+/// tiles just render as flat leaves — matches WizTree, which also stops
+/// subdividing once boxes get too small to be readable.
 const MAX_MAP_DEPTH: usize = 4;
 const MIN_RECURSE_WIDTH: u16 = 8;
 const MIN_RECURSE_HEIGHT: u16 = 4;
 
+/// One rectangle in the fully-expanded map: a file or a folder, at whatever
+/// nesting depth it landed at. `top_index` always points back to which
+/// top-level (currently listed) entry this tile ultimately belongs to, so
+/// the whole branch can be colored and selected consistently.
 struct Tile<'a> {
     node: &'a DirNode,
     rect: Rect,
     top_index: usize,
     depth: usize,
+    /// true if this folder's own children are drawn inside it (so its body
+    /// shouldn't also print a size label that they'd just paint over).
     expanded: bool,
+    /// This tile's share of its immediate containing folder's total size —
+    /// not of the whole scan, so nested tiles read the way WizTree's do.
+    pct_of_parent: f64,
 }
 
+/// Recursively squarifies `children` into `area`, then — for any directory
+/// tile that's both big enough on screen and within `max_depth` — repeats the
+/// process one level deeper inside that tile's own borders. This is what
+/// makes the whole tree visible at once instead of just the current folder.
 fn layout_tiles<'a>(
     children: &'a [DirNode],
     area: Rect,
@@ -151,6 +168,7 @@ fn layout_tiles<'a>(
         return;
     }
 
+    let parent_total: u64 = children.iter().map(|c| c.size).sum();
     let sizes: Vec<u64> = children.iter().map(|c| c.size).collect();
     let rects = treemap::layout(&sizes, area);
 
@@ -166,12 +184,19 @@ fn layout_tiles<'a>(
             && rect.width >= MIN_RECURSE_WIDTH
             && rect.height >= MIN_RECURSE_HEIGHT;
 
+        let pct_of_parent = if parent_total > 0 {
+            child.size as f64 / parent_total as f64 * 100.0
+        } else {
+            0.0
+        };
+
         out.push(Tile {
             node: child,
             rect: *rect,
             top_index,
             depth,
             expanded: can_recurse,
+            pct_of_parent,
         });
 
         if can_recurse {
@@ -195,6 +220,9 @@ fn layout_tiles<'a>(
     }
 }
 
+/// WizTree-style nested treemap, docked under the list: the current directory's
+/// whole visible tree — files and subfolders, several levels deep — squarified
+/// and drawn all at once, with every tile labeled with its name and size.
 fn draw_map(f: &mut Frame, app: &App, area: Rect) {
     let node = app.current_node();
 
@@ -218,6 +246,9 @@ fn draw_map(f: &mut Frame, app: &App, area: Rect) {
     let mut tiles: Vec<Tile> = Vec::new();
     layout_tiles(&node.children, inner, 1, MAX_MAP_DEPTH, None, &mut tiles);
 
+    // Parents are always pushed before their own children in `tiles`, so
+    // painting in this order naturally layers nested boxes on top of their
+    // parent's fill instead of the other way around.
     for tile in &tiles {
         let rect = tile.rect;
         let selected = tile.depth == 1 && tile.top_index == app.selected;
@@ -248,22 +279,53 @@ fn draw_map(f: &mut Frame, app: &App, area: Rect) {
 
             if show_title {
                 let icon = if tile.node.is_dir { "D" } else { "F" };
-                block = block.title(format!(" [{}] {} ", icon, tile.node.name));
+                block = block.title(format!(
+                    " [{}] {} — {} ({:.0}%) ",
+                    icon,
+                    tile.node.name,
+                    format_size(tile.node.size, DECIMAL),
+                    tile.pct_of_parent
+                ));
             }
 
             let tile_inner = block.inner(rect);
             f.render_widget(block, rect);
 
             if !tile.expanded && tile_inner.width > 0 && tile_inner.height > 0 {
-                let label = if show_title {
-                    format_size(tile.node.size, DECIMAL)
+                let mut lines: Vec<Line> = Vec::new();
+
+                if show_title {
+                    // Name, size and % already live in the title, so the body
+                    // is free for the extra stats there wasn't room for up there.
+                    if tile.node.is_dir {
+                        lines.push(Line::from(format!(
+                            "{} item(s), {} file(s)",
+                            tile.node.children.len(),
+                            format_count(tile.node.file_count)
+                        )));
+                    } else {
+                        lines.push(Line::from(file_kind(&tile.node.name)));
+                    }
                 } else {
-                    format!(
+                    // No room for a title at all — the body has to carry
+                    // everything, one fact per line as height allows.
+                    lines.push(Line::from(format!(
                         "{} {}",
                         tile.node.name,
                         format_size(tile.node.size, DECIMAL)
-                    )
-                };
+                    )));
+                    lines.push(Line::from(format!("{:.0}% of parent", tile.pct_of_parent)));
+                    if tile.node.is_dir {
+                        lines.push(Line::from(format!(
+                            "{} item(s), {} file(s)",
+                            tile.node.children.len(),
+                            format_count(tile.node.file_count)
+                        )));
+                    } else {
+                        lines.push(Line::from(file_kind(&tile.node.name)));
+                    }
+                }
+
                 let text_style =
                     Style::default()
                         .fg(Color::White)
@@ -273,7 +335,7 @@ fn draw_map(f: &mut Frame, app: &App, area: Rect) {
                         } else {
                             Modifier::empty()
                         });
-                let p = Paragraph::new(label)
+                let p = Paragraph::new(lines)
                     .style(text_style)
                     .wrap(Wrap { trim: true });
                 f.render_widget(p, tile_inner);
@@ -290,6 +352,10 @@ fn draw_map(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+/// Cycles through a small palette so adjacent top-level branches are visually
+/// distinct, using a cooler palette for directories and a warmer one for
+/// files — same idea WizTree uses to separate folders from individual files
+/// at a glance.
 fn tile_color(top_index: usize, is_dir: bool) -> Color {
     const DIR_PALETTE: [Color; 6] = [
         Color::Rgb(40, 90, 160),
@@ -314,6 +380,8 @@ fn tile_color(top_index: usize, is_dir: bool) -> Color {
     }
 }
 
+/// Darkens a color slightly per nesting depth, so deeper tiles visibly recede
+/// while still reading as "part of" their parent's color family.
 fn shade(color: Color, depth: usize) -> Color {
     if let Color::Rgb(r, g, b) = color {
         let factor = 1.0 - ((depth.saturating_sub(1)) as f32 * 0.12).min(0.55);
@@ -324,6 +392,33 @@ fn shade(color: Color, depth: usize) -> Color {
         )
     } else {
         color
+    }
+}
+
+/// Inserts thousands separators into a plain integer, e.g. 12345 -> "12,345".
+/// A tiny hand-rolled formatter so we don't need an extra crate just for this.
+fn format_count(n: u64) -> String {
+    let digits = n.to_string();
+    let bytes = digits.as_bytes();
+    let mut out = String::with_capacity(bytes.len() + bytes.len() / 3);
+    for (i, b) in bytes.iter().enumerate() {
+        if i != 0 && (bytes.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(*b as char);
+    }
+    out
+}
+
+/// A short human label for a file tile's body — its extension if it has one,
+/// otherwise a generic fallback.
+fn file_kind(name: &str) -> String {
+    match std::path::Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+    {
+        Some(ext) if !ext.is_empty() => format!("{} file", ext.to_uppercase()),
+        _ => "file".to_string(),
     }
 }
 
