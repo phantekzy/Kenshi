@@ -4,6 +4,13 @@ use crate::tree::DirNode;
 pub enum SortMode {
     Size,
     Name,
+    Modified,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum BottomPanel {
+    Map,
+    Types,
 }
 
 pub struct App {
@@ -12,6 +19,7 @@ pub struct App {
     selected_stack: Vec<usize>,
     pub selected: usize,
     pub sort_mode: SortMode,
+    pub bottom_panel: BottomPanel,
     pub status: Option<String>,
 }
 
@@ -23,6 +31,7 @@ impl App {
             selected_stack: Vec::new(),
             selected: 0,
             sort_mode: SortMode::Size,
+            bottom_panel: BottomPanel::Map,
             status: None,
         }
     }
@@ -100,14 +109,23 @@ impl App {
     pub fn toggle_sort(&mut self) {
         self.sort_mode = match self.sort_mode {
             SortMode::Size => SortMode::Name,
-            SortMode::Name => SortMode::Size,
+            SortMode::Name => SortMode::Modified,
+            SortMode::Modified => SortMode::Size,
         };
         let mode = self.sort_mode;
         let node = self.current_node_mut();
         match mode {
             SortMode::Size => node.sort_by_size(),
             SortMode::Name => node.sort_by_name(),
+            SortMode::Modified => node.sort_by_modified(),
         }
         self.selected = 0;
+    }
+
+    pub fn toggle_bottom_panel(&mut self) {
+        self.bottom_panel = match self.bottom_panel {
+            BottomPanel::Map => BottomPanel::Types,
+            BottomPanel::Types => BottomPanel::Map,
+        };
     }
 }
