@@ -11,7 +11,7 @@ keywords = ["cli", "disk-usage", "terminal", "tui", "analyzer"]
 categories = ["command-line-utilities"]
 
 [[bin]]
-name = "kenshii"
+name = "kenshi"
 path = "src/main.rs"
 
 [profile.release]
