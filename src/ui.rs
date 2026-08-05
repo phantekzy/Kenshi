@@ -64,7 +64,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         BottomPanel::Map => "map",
         BottomPanel::Types => "types",
     };
-    let title = format!(" wiztree-rs — sorted by {sort_label} — panel: {panel_label} ");
+    let title = format!(" Kenshi — sorted by {sort_label} — panel: {panel_label} ");
 
     let p = Paragraph::new(text).block(Block::default().borders(Borders::ALL).title(title));
     f.render_widget(p, area);
@@ -414,7 +414,7 @@ pub fn draw_scanning(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
-        .title(" wiztree-rs — scanning ");
+        .title(" Kenshi — scanning ");
 
     let text = vec![
         Line::from(""),

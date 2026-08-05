@@ -101,3 +101,30 @@ pub fn lerp_color(a: Color, b: Color, t: f32) -> Color {
     let lerp = |x: u8, y: u8| -> u8 { (x as f32 + (y as f32 - x as f32) * t).round() as u8 };
     Color::Rgb(lerp(ar, br), lerp(ag, bg), lerp(ab, bb))
 }
+
+pub fn color_for_index(index: usize, _total: usize) -> Color {
+    const GOLDEN_ANGLE: f32 = 137.507_76;
+    let hue = ((index as f32) * GOLDEN_ANGLE) % 360.0;
+    let (r, g, b) = hsl_to_rgb(hue, 0.62, 0.52);
+    Color::Rgb(r, g, b)
+}
+
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let hp = h / 60.0;
+    let x = c * (1.0 - (hp.rem_euclid(2.0) - 1.0).abs());
+    let (r1, g1, b1) = match hp as i32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = l - c / 2.0;
+    (
+        ((r1 + m) * 255.0).round() as u8,
+        ((g1 + m) * 255.0).round() as u8,
+        ((b1 + m) * 255.0).round() as u8,
+    )
+}
