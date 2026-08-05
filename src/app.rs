@@ -1,4 +1,7 @@
+use crate::anim::{Animation, Pulse};
 use crate::tree::DirNode;
+
+pub const VIEW_ANIM_MS: u64 = 380;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SortMode {
@@ -21,6 +24,8 @@ pub struct App {
     pub sort_mode: SortMode,
     pub bottom_panel: BottomPanel,
     pub status: Option<String>,
+    pub anim: Animation,
+    pub pulse: Pulse,
 }
 
 impl App {
@@ -33,7 +38,13 @@ impl App {
             sort_mode: SortMode::Size,
             bottom_panel: BottomPanel::Map,
             status: None,
+            anim: Animation::started(VIEW_ANIM_MS),
+            pulse: Pulse::new(),
         }
+    }
+
+    fn restart_view_anim(&mut self) {
+        self.anim = Animation::started(VIEW_ANIM_MS);
     }
 
     pub fn current_node(&self) -> &DirNode {
@@ -98,11 +109,13 @@ impl App {
         self.selected_stack.push(self.selected);
         self.nav_stack.push(self.selected);
         self.selected = 0;
+        self.restart_view_anim();
     }
 
     pub fn back(&mut self) {
         if self.nav_stack.pop().is_some() {
             self.selected = self.selected_stack.pop().unwrap_or(0);
+            self.restart_view_anim();
         }
     }
 
@@ -120,6 +133,7 @@ impl App {
             SortMode::Modified => node.sort_by_modified(),
         }
         self.selected = 0;
+        self.restart_view_anim();
     }
 
     pub fn toggle_bottom_panel(&mut self) {
@@ -127,5 +141,6 @@ impl App {
             BottomPanel::Map => BottomPanel::Types,
             BottomPanel::Types => BottomPanel::Map,
         };
+        self.restart_view_anim();
     }
 }
