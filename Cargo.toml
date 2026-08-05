@@ -11,7 +11,7 @@ keywords = ["cli", "disk-usage", "terminal", "tui", "analyzer"]
 categories = ["command-line-utilities"]
 
 [[bin]]
-name = "kenshii"
+name = "kenshi"
 path = "src/main.rs"
 
 [profile.release]
@@ -23,3 +23,8 @@ ratatui = "0.26"
 crossterm = "0.27"
 clap = { version = "4", features = ["derive"] }
 humansize = "2"
+
+blake3 = "1"
+serde = { version = "1", features = ["derive"] }
+bincode = "1.3"
+dirs = "5"
