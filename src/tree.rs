@@ -10,6 +10,17 @@ const MAX_LIVE_THREADS: usize = 64;
 
 static LIVE_THREADS: AtomicUsize = AtomicUsize::new(0);
 
+static SCAN_FILES_SEEN: AtomicUsize = AtomicUsize::new(0);
+static SCAN_BYTES_SEEN: AtomicUsize = AtomicUsize::new(0);
+
+pub fn scanned_files() -> u64 {
+    SCAN_FILES_SEEN.load(Ordering::Relaxed) as u64
+}
+
+pub fn scanned_bytes() -> u64 {
+    SCAN_BYTES_SEEN.load(Ordering::Relaxed) as u64
+}
+
 pub struct DirNode {
     pub name: String,
     pub path: PathBuf,
@@ -23,6 +34,8 @@ pub struct DirNode {
 
 impl DirNode {
     pub fn scan(path: &Path) -> DirNode {
+        SCAN_FILES_SEEN.store(0, Ordering::Relaxed);
+        SCAN_BYTES_SEEN.store(0, Ordering::Relaxed);
         Self::scan_at(path, 0)
     }
 
@@ -66,9 +79,6 @@ impl DirNode {
                 .iter()
                 .map(|c| if c.is_dir { c.file_count } else { 1 })
                 .sum();
-            // A folder's "modified" is the most recent touch anywhere inside it
-            // (or its own timestamp if that's more recent) — the same "when did
-            // this last change" signal TreeSize/WizTree show for directories.
             let modified = children
                 .iter()
                 .map(|c| c.modified)
@@ -91,6 +101,8 @@ impl DirNode {
             }
         } else {
             let size = meta.map(|m| m.len()).unwrap_or(0);
+            SCAN_FILES_SEEN.fetch_add(1, Ordering::Relaxed);
+            SCAN_BYTES_SEEN.fetch_add(size as usize, Ordering::Relaxed);
             DirNode {
                 name,
                 path: path.to_path_buf(),
@@ -154,5 +166,32 @@ impl DirNode {
 
     pub fn sort_by_modified(&mut self) {
         self.children.sort_by(|a, b| b.modified.cmp(&a.modified));
+    }
+
+    pub fn extension_breakdown(&self) -> Vec<(String, u64, u64)> {
+        use crate::colors::extension_of;
+        use std::collections::HashMap;
+
+        fn walk(node: &DirNode, acc: &mut HashMap<String, (u64, u64)>) {
+            if node.is_dir {
+                for child in &node.children {
+                    walk(child, acc);
+                }
+            } else {
+                let entry = acc.entry(extension_of(&node.name)).or_insert((0, 0));
+                entry.0 += node.size;
+                entry.1 += 1;
+            }
+        }
+
+        let mut acc = HashMap::new();
+        walk(self, &mut acc);
+
+        let mut out: Vec<(String, u64, u64)> = acc
+            .into_iter()
+            .map(|(ext, (size, count))| (ext, size, count))
+            .collect();
+        out.sort_by(|a, b| b.1.cmp(&a.1));
+        out
     }
 }
