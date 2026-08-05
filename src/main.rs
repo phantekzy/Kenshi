@@ -3,6 +3,7 @@ mod tree;
 mod treemap;
 mod ui;
 
+mod anim;
 use app::App;
 use clap::Parser;
 use crossterm::{
