@@ -1,9 +1,10 @@
+mod anim;
 mod app;
+mod colors;
 mod tree;
 mod treemap;
 mod ui;
 
-mod anim;
 use app::App;
 use clap::Parser;
 use crossterm::{
@@ -14,8 +15,12 @@ use crossterm::{
 use ratatui::{backend::CrosstermBackend, widgets::ListState, Terminal};
 use std::io::{self, Stdout};
 use std::path::PathBuf;
+use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, Instant};
 use tree::DirNode;
+
+const FRAME_INTERVAL: Duration = Duration::from_millis(33);
 
 #[derive(Parser, Debug)]
 #[command(name = "wiztree-rs", version, about)]
@@ -36,17 +41,18 @@ fn main() -> io::Result<()> {
         std::process::exit(1);
     }
 
-    eprintln!("Scanning {} ...", path.display());
-    let start = Instant::now();
-    let root = DirNode::scan(&path);
-    eprintln!(
-        "Done in {:.2}s — {} bytes across {} files.",
-        start.elapsed().as_secs_f64(),
-        root.size,
-        root.file_count
-    );
-
     let mut terminal = setup_terminal()?;
+
+    let root = match scan_with_splash(&mut terminal, &path)? {
+        Some(root) => root,
+        None => {
+            // User cancelled the scan.
+            restore_terminal(&mut terminal)?;
+            println!("Cancelled.");
+            return Ok(());
+        }
+    };
+
     let mut app = App::new(root);
     let result = run(&mut terminal, &mut app, &path);
     restore_terminal(&mut terminal)?;
@@ -71,6 +77,52 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> io::Re
     terminal.show_cursor()
 }
 
+fn scan_with_splash(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    path: &PathBuf,
+) -> io::Result<Option<DirNode>> {
+    let (tx, rx) = mpsc::channel();
+    let scan_path = path.clone();
+    thread::spawn(move || {
+        let root = DirNode::scan(&scan_path);
+        let _ = tx.send(root);
+    });
+
+    let display_path = path.display().to_string();
+    let start = Instant::now();
+
+    loop {
+        let elapsed = start.elapsed().as_secs_f32();
+        terminal.draw(|f| {
+            ui::draw_scanning(
+                f,
+                &display_path,
+                elapsed,
+                tree::scanned_files(),
+                tree::scanned_bytes(),
+            )
+        })?;
+
+        if let Ok(root) = rx.try_recv() {
+            return Ok(Some(root));
+        }
+
+        if event::poll(FRAME_INTERVAL)? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press
+                    && matches!(key.code, KeyCode::Char('q') | KeyCode::Esc)
+                {
+                    return Ok(None);
+                }
+            }
+        }
+
+        if let Ok(root) = rx.try_recv() {
+            return Ok(Some(root));
+        }
+    }
+}
+
 fn run(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut App,
@@ -82,7 +134,7 @@ fn run(
         list_state.select(Some(app.selected));
         terminal.draw(|f| ui::draw(f, app, &mut list_state))?;
 
-        if event::poll(Duration::from_millis(150))? {
+        if event::poll(FRAME_INTERVAL)? {
             if let Event::Key(key) = event::read()? {
                 if key.kind != KeyEventKind::Press {
                     continue;
