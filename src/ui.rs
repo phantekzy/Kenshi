@@ -1,69 +1,117 @@
-use crate::app::App;
-use crate::tree::DirNode;
+use crate::app::{App, BottomPanel, SortMode};
+use crate::colors::{color_for_entry, color_for_extension, lerp_color, DIR_COLOR};
 use crate::treemap;
 use humansize::{format_size, DECIMAL};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Frame,
 };
-use std::collections::HashMap;
 use std::time::SystemTime;
 
-const BAR_WIDTH: usize = 20;
+const BAR_WIDTH: usize = 18;
+const SELECT_GLOW_LOW: Color = Color::Rgb(30, 55, 95);
+const SELECT_GLOW_HIGH: Color = Color::Rgb(55, 110, 195);
 
 pub fn draw(f: &mut Frame, app: &App, list_state: &mut ListState) {
     let area = f.size();
-    let outer = Layout::default()
+    let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // header
-            Constraint::Min(8),    // list + map
-            Constraint::Length(3), // footer
+            Constraint::Length(3),
+            Constraint::Min(6),
+            Constraint::Length(3),
         ])
         .split(area);
 
-    draw_header(f, app, outer[0]);
+    draw_header(f, app, chunks[0]);
 
-    let panels = Layout::default()
+    let body = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
-        .split(outer[1]);
+        .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
+        .split(chunks[1]);
 
-    draw_list(f, app, panels[0], list_state);
+    draw_list(f, app, body[0], list_state);
     match app.bottom_panel {
-        crate::app::BottomPanel::Map => draw_map(f, app, panels[1]),
-        crate::app::BottomPanel::Types => draw_types(f, app, panels[1]),
+        BottomPanel::Map => draw_map(f, app, body[1]),
+        BottomPanel::Types => draw_types(f, app, body[1]),
     }
 
-    draw_footer(f, app, outer[2]);
+    draw_footer(f, app, chunks[2]);
 }
 
 fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let node = app.current_node();
+    let reveal = app.anim.eased();
+    let animated_size = (node.size as f64 * reveal as f64).round() as u64;
+    let animated_items = ((node.children.len() as f32) * reveal).round() as usize;
+
     let text = format!(
         " {}    {} item(s)    {} total ",
         app.breadcrumb(),
-        node.children.len(),
-        format_size(node.size, DECIMAL)
+        animated_items,
+        format_size(animated_size, DECIMAL)
     );
-    let title = format!(
-        " Kenshi by phantekzy — disk usage ({}) ",
-        match app.sort_mode {
-            crate::app::SortMode::Size => "sorted by size",
-            crate::app::SortMode::Name => "sorted by name",
-            crate::app::SortMode::Modified => "sorted by date modified",
-        }
-    );
+
+    let sort_label = match app.sort_mode {
+        SortMode::Size => "size",
+        SortMode::Name => "name",
+        SortMode::Modified => "modified",
+    };
+    let panel_label = match app.bottom_panel {
+        BottomPanel::Map => "map",
+        BottomPanel::Types => "types",
+    };
+    let title = format!(" wiztree-rs — sorted by {sort_label} — panel: {panel_label} ");
+
     let p = Paragraph::new(text).block(Block::default().borders(Borders::ALL).title(title));
     f.render_widget(p, area);
+}
+
+fn row_progress(app: &App, index: usize) -> f32 {
+    let stagger = (index as u64 * 14).min(180);
+    app.anim.eased_staggered(stagger, 260)
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let keep = max.saturating_sub(1);
+    let mut out: String = s.chars().take(keep).collect();
+    out.push('…');
+    out
+}
+
+fn format_age(modified: SystemTime) -> String {
+    let secs = SystemTime::now()
+        .duration_since(modified)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if secs < 60 {
+        "just now".to_string()
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86400 {
+        format!("{}h ago", secs / 3600)
+    } else if secs < 86400 * 30 {
+        format!("{}d ago", secs / 86400)
+    } else if secs < 86400 * 365 {
+        format!("{}mo ago", secs / (86400 * 30))
+    } else {
+        format!("{}y ago", secs / (86400 * 365))
+    }
 }
 
 fn draw_list(f: &mut Frame, app: &App, area: Rect, list_state: &mut ListState) {
     let node = app.current_node();
     let parent_size = node.size.max(1);
+    let show_age = area.width >= 100;
 
     if node.children.is_empty() {
         let msg = if node.readable {
@@ -81,17 +129,18 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect, list_state: &mut ListState) {
     let items: Vec<ListItem> = node
         .children
         .iter()
-        .map(|c| {
-            let pct = (c.size as f64 / parent_size as f64) * 100.0;
+        .enumerate()
+        .map(|(i, c)| {
+            let progress = row_progress(app, i);
+            let target_pct = (c.size as f64 / parent_size as f64) * 100.0;
+            let pct = target_pct * progress as f64;
+
             let filled = ((pct / 100.0) * BAR_WIDTH as f64).round() as usize;
             let filled = filled.min(BAR_WIDTH);
             let bar = format!("{}{}", "#".repeat(filled), "-".repeat(BAR_WIDTH - filled));
 
-            let (color, icon) = if c.is_dir {
-                (Color::Cyan, "D")
-            } else {
-                (Color::White, "F")
-            };
+            let color = color_for_entry(&c.name, c.is_dir);
+            let icon = if c.is_dir { "D" } else { "F" };
 
             let name_style = if c.is_dir {
                 Style::default().fg(color).add_modifier(Modifier::BOLD)
@@ -99,36 +148,45 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect, list_state: &mut ListState) {
                 Style::default().fg(color)
             };
 
-            let line = Line::from(vec![
+            let mut spans = vec![
                 Span::styled(
                     format!("{:>6.1}% ", pct),
                     Style::default().fg(Color::Yellow),
                 ),
                 Span::styled(format!("[{}] ", bar), Style::default().fg(Color::DarkGray)),
                 Span::styled(
-                    format!("{:>10} ", format_size(c.size, DECIMAL)),
+                    format!(
+                        "{:>10} ",
+                        format_size((c.size as f64 * progress as f64) as u64, DECIMAL)
+                    ),
                     Style::default().fg(Color::Green),
                 ),
-                Span::styled(
-                    format!("{:>9} ", format_ago(c.modified)),
-                    Style::default().fg(Color::Magenta),
-                ),
                 Span::styled(format!("[{}] ", icon), Style::default().fg(color)),
-                Span::styled(c.name.clone(), name_style),
-            ]);
-            ListItem::new(line)
+                Span::styled(truncate(&c.name, 40), name_style),
+            ];
+
+            if show_age {
+                spans.push(Span::styled(
+                    format!("   {}", format_age(c.modified)),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+
+            ListItem::new(Line::from(spans))
         })
         .collect();
+
+    let glow = lerp_color(SELECT_GLOW_LOW, SELECT_GLOW_HIGH, app.pulse.wave(1400));
 
     let list = List::new(items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Contents (Enter: open dir, Backspace: up)"),
+                .title("Contents — Enter open · Backspace up"),
         )
         .highlight_style(
             Style::default()
-                .bg(Color::Blue)
+                .bg(glow)
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
         )
@@ -137,389 +195,259 @@ fn draw_list(f: &mut Frame, app: &App, area: Rect, list_state: &mut ListState) {
     f.render_stateful_widget(list, area, list_state);
 }
 
-const MAX_MAP_DEPTH: usize = 4;
-const MIN_RECURSE_WIDTH: u16 = 8;
-const MIN_RECURSE_HEIGHT: u16 = 4;
-
-struct Tile<'a> {
-    node: &'a DirNode,
-    rect: Rect,
-    top_index: usize,
-    depth: usize,
-    expanded: bool,
-    pct_of_parent: f64,
-}
-
-fn layout_tiles<'a>(
-    children: &'a [DirNode],
-    area: Rect,
-    depth: usize,
-    max_depth: usize,
-    parent_top_index: Option<usize>,
-    out: &mut Vec<Tile<'a>>,
-) {
-    if children.is_empty() || area.width == 0 || area.height == 0 {
-        return;
+fn animate_rect(target: Rect, progress: f32) -> Rect {
+    if progress >= 1.0 || target.width == 0 || target.height == 0 {
+        return target;
     }
-
-    let parent_total: u64 = children.iter().map(|c| c.size).sum();
-    let sizes: Vec<u64> = children.iter().map(|c| c.size).collect();
-    let rects = treemap::layout(&sizes, area);
-
-    for (i, (child, rect)) in children.iter().zip(rects.iter()).enumerate() {
-        if rect.width == 0 || rect.height == 0 {
-            continue;
-        }
-
-        let top_index = parent_top_index.unwrap_or(i);
-        let can_recurse = child.is_dir
-            && !child.children.is_empty()
-            && depth < max_depth
-            && rect.width >= MIN_RECURSE_WIDTH
-            && rect.height >= MIN_RECURSE_HEIGHT;
-
-        let pct_of_parent = if parent_total > 0 {
-            child.size as f64 / parent_total as f64 * 100.0
-        } else {
-            0.0
-        };
-
-        out.push(Tile {
-            node: child,
-            rect: *rect,
-            top_index,
-            depth,
-            expanded: can_recurse,
-            pct_of_parent,
-        });
-
-        if can_recurse {
-            let inner = Rect {
-                x: rect.x.saturating_add(1),
-                y: rect.y.saturating_add(1),
-                width: rect.width.saturating_sub(2),
-                height: rect.height.saturating_sub(2),
-            };
-            if inner.width > 0 && inner.height > 0 {
-                layout_tiles(
-                    &child.children,
-                    inner,
-                    depth + 1,
-                    max_depth,
-                    Some(top_index),
-                    out,
-                );
-            }
-        }
+    let progress = progress.max(0.0);
+    let cx = target.x as f32 + target.width as f32 / 2.0;
+    let cy = target.y as f32 + target.height as f32 / 2.0;
+    let w = target.width as f32 * progress;
+    let h = target.height as f32 * progress;
+    let x = (cx - w / 2.0).round().max(target.x as f32) as u16;
+    let y = (cy - h / 2.0).round().max(target.y as f32) as u16;
+    Rect {
+        x,
+        y,
+        width: w.round() as u16,
+        height: h.round() as u16,
     }
 }
 
 fn draw_map(f: &mut Frame, app: &App, area: Rect) {
     let node = app.current_node();
-
-    let outer = Block::default()
+    let block = Block::default()
         .borders(Borders::ALL)
-        .title("Map (Enter: open dir, Backspace: up)");
-    let inner = outer.inner(area);
-    f.render_widget(outer, area);
+        .title("Map — Tab: switch panel");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
 
-    if node.children.is_empty() {
-        let msg = if node.readable {
-            "(empty directory)"
-        } else {
-            "(permission denied)"
-        };
-        let p = Paragraph::new(msg).style(Style::default().fg(Color::DarkGray));
-        f.render_widget(p, inner);
+    if node.children.is_empty() || inner.width == 0 || inner.height == 0 {
         return;
     }
 
-    let mut tiles: Vec<Tile> = Vec::new();
-    layout_tiles(&node.children, inner, 1, MAX_MAP_DEPTH, None, &mut tiles);
+    let sizes: Vec<u64> = node.children.iter().map(|c| c.size).collect();
+    let rects = treemap::layout(&sizes, inner);
+    let progress = app.anim.eased();
+    let glow = lerp_color(Color::White, Color::Yellow, app.pulse.wave(900));
 
-    for tile in &tiles {
-        let rect = tile.rect;
-        let selected = tile.depth == 1 && tile.top_index == app.selected;
-        let base = tile_color(tile.top_index, tile.node.is_dir);
-        let color = shade(base, tile.depth);
-        let can_frame = rect.width >= 3 && rect.height >= 2;
+    for (i, (c, target)) in node.children.iter().zip(rects.iter()).enumerate() {
+        let rect = animate_rect(*target, progress);
+        if rect.width == 0 || rect.height == 0 {
+            continue;
+        }
 
-        if can_frame {
-            let border_style = if selected {
-                Style::default()
-                    .fg(Color::White)
-                    .bg(color)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::Black).bg(color)
-            };
-
-            let show_title = rect.width >= 6;
-            let mut block = Block::default()
-                .borders(Borders::ALL)
-                .border_type(if selected {
-                    BorderType::Double
-                } else {
-                    BorderType::Plain
-                })
-                .border_style(border_style)
-                .style(Style::default().bg(color));
-
-            if show_title {
-                let icon = if tile.node.is_dir { "D" } else { "F" };
-                block = block.title(format!(
-                    " [{}] {} — {} ({:.0}%) ",
-                    icon,
-                    tile.node.name,
-                    format_size(tile.node.size, DECIMAL),
-                    tile.pct_of_parent
-                ));
-            }
-
-            let tile_inner = block.inner(rect);
-            f.render_widget(block, rect);
-
-            if !tile.expanded && tile_inner.width > 0 && tile_inner.height > 0 {
-                let mut lines: Vec<Line> = Vec::new();
-
-                if show_title {
-                    if tile.node.is_dir {
-                        lines.push(Line::from(format!(
-                            "{} item(s), {} file(s)",
-                            tile.node.children.len(),
-                            format_count(tile.node.file_count)
-                        )));
-                    } else {
-                        lines.push(Line::from(file_kind(&tile.node.name)));
-                    }
-                } else {
-                    lines.push(Line::from(format!(
-                        "{} {}",
-                        tile.node.name,
-                        format_size(tile.node.size, DECIMAL)
-                    )));
-                    lines.push(Line::from(format!("{:.0}% of parent", tile.pct_of_parent)));
-                    if tile.node.is_dir {
-                        lines.push(Line::from(format!(
-                            "{} item(s), {} file(s)",
-                            tile.node.children.len(),
-                            format_count(tile.node.file_count)
-                        )));
-                    } else {
-                        lines.push(Line::from(file_kind(&tile.node.name)));
-                    }
-                }
-
-                let text_style =
-                    Style::default()
-                        .fg(Color::White)
-                        .bg(color)
-                        .add_modifier(if selected {
-                            Modifier::BOLD
-                        } else {
-                            Modifier::empty()
-                        });
-                let p = Paragraph::new(lines)
-                    .style(text_style)
-                    .wrap(Wrap { trim: true });
-                f.render_widget(p, tile_inner);
-            }
+        let bg = color_for_entry(&c.name, c.is_dir);
+        let text_fg = if is_light(bg) {
+            Color::Black
         } else {
-            let fill_style = if selected {
-                Style::default().bg(Color::White)
-            } else {
-                Style::default().bg(color)
-            };
-            let fill = Block::default().style(fill_style);
-            f.render_widget(fill, rect);
+            Color::White
+        };
+
+        let label = if rect.height >= 2 && rect.width >= 4 {
+            format!(
+                "{}\n{}",
+                truncate(&c.name, rect.width as usize),
+                truncate(&format_size(c.size, DECIMAL), rect.width as usize)
+            )
+        } else if rect.height >= 1 && rect.width >= 3 {
+            truncate(&c.name, rect.width as usize)
+        } else {
+            String::new()
+        };
+
+        let p = Paragraph::new(label).style(Style::default().fg(text_fg).bg(bg));
+        f.render_widget(p, rect);
+
+        if i == app.selected && rect.width >= 3 && rect.height >= 3 {
+            let border = Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(glow).add_modifier(Modifier::BOLD));
+            f.render_widget(border, rect);
         }
     }
 }
 
-fn tile_color(top_index: usize, is_dir: bool) -> Color {
-    const DIR_PALETTE: [Color; 6] = [
-        Color::Rgb(40, 90, 160),
-        Color::Rgb(35, 130, 130),
-        Color::Rgb(70, 100, 185),
-        Color::Rgb(30, 145, 145),
-        Color::Rgb(60, 80, 165),
-        Color::Rgb(45, 115, 155),
-    ];
-    const FILE_PALETTE: [Color; 6] = [
-        Color::Rgb(150, 105, 35),
-        Color::Rgb(140, 70, 70),
-        Color::Rgb(165, 130, 45),
-        Color::Rgb(130, 90, 90),
-        Color::Rgb(170, 120, 55),
-        Color::Rgb(120, 80, 100),
-    ];
-    if is_dir {
-        DIR_PALETTE[top_index % DIR_PALETTE.len()]
+fn is_light(c: Color) -> bool {
+    if let Color::Rgb(r, g, b) = c {
+        (r as u32 * 299 + g as u32 * 587 + b as u32 * 114) / 1000 > 150
     } else {
-        FILE_PALETTE[top_index % FILE_PALETTE.len()]
-    }
-}
-
-fn shade(color: Color, depth: usize) -> Color {
-    if let Color::Rgb(r, g, b) = color {
-        let factor = 1.0 - ((depth.saturating_sub(1)) as f32 * 0.12).min(0.55);
-        Color::Rgb(
-            (r as f32 * factor) as u8,
-            (g as f32 * factor) as u8,
-            (b as f32 * factor) as u8,
-        )
-    } else {
-        color
-    }
-}
-
-fn format_count(n: u64) -> String {
-    let digits = n.to_string();
-    let bytes = digits.as_bytes();
-    let mut out = String::with_capacity(bytes.len() + bytes.len() / 3);
-    for (i, b) in bytes.iter().enumerate() {
-        if i != 0 && (bytes.len() - i) % 3 == 0 {
-            out.push(',');
-        }
-        out.push(*b as char);
-    }
-    out
-}
-
-fn file_kind(name: &str) -> String {
-    match std::path::Path::new(name)
-        .extension()
-        .and_then(|e| e.to_str())
-    {
-        Some(ext) if !ext.is_empty() => format!("{} file", ext.to_uppercase()),
-        _ => "file".to_string(),
-    }
-}
-
-const MAX_TYPE_ROWS: usize = 200;
-
-fn collect_extension_stats(node: &DirNode, stats: &mut HashMap<String, (u64, u64)>) {
-    if node.is_dir {
-        for child in &node.children {
-            collect_extension_stats(child, stats);
-        }
-    } else {
-        let ext = std::path::Path::new(&node.name)
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_uppercase())
-            .unwrap_or_else(|| "(no extension)".to_string());
-        let entry = stats.entry(ext).or_insert((0, 0));
-        entry.0 += node.size;
-        entry.1 += 1;
+        false
     }
 }
 
 fn draw_types(f: &mut Frame, app: &App, area: Rect) {
     let node = app.current_node();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("Types — Tab: switch panel");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let mut breakdown = node.extension_breakdown();
+    if breakdown.is_empty() {
+        let p = Paragraph::new("(no files)").style(Style::default().fg(Color::DarkGray));
+        f.render_widget(p, inner);
+        return;
+    }
+
+    const TOP_N: usize = 7;
+    let total: u64 = breakdown
+        .iter()
+        .map(|(_, size, _)| *size)
+        .sum::<u64>()
+        .max(1);
+    let mut rows: Vec<(String, u64, u64)> = breakdown.drain(..breakdown.len().min(TOP_N)).collect();
+    if !breakdown.is_empty() {
+        let other_size: u64 = breakdown.iter().map(|(_, s, _)| *s).sum();
+        let other_count: u64 = breakdown.iter().map(|(_, _, c)| *c).sum();
+        rows.push(("other".to_string(), other_size, other_count));
+    }
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(0),
+        ])
+        .split(inner);
+
+    draw_stacked_bar(f, app, layout[0], &rows, total);
+
+    let legend_area = layout[2];
+    for (row_i, (ext, size, count)) in rows.iter().enumerate() {
+        if row_i as u16 >= legend_area.height {
+            break;
+        }
+        let progress = app.anim.eased_staggered((row_i as u64) * 40, 300);
+        let slide = ((1.0 - progress) * 8.0).round() as usize;
+        let pct = (*size as f64 / total as f64) * 100.0;
+
+        let color = if ext == "other" {
+            Color::DarkGray
+        } else {
+            color_for_extension(ext)
+        };
+
+        let line = Line::from(vec![
+            Span::raw(" ".repeat(slide)),
+            Span::styled("■ ", Style::default().fg(color)),
+            Span::styled(format!("{:<10}", ext), Style::default().fg(Color::White)),
+            Span::styled(
+                format!("{:>10}  ", format_size(*size, DECIMAL)),
+                Style::default().fg(Color::Green),
+            ),
+            Span::styled(
+                format!("{:>5.1}%  ", pct),
+                Style::default().fg(Color::Yellow),
+            ),
+            Span::styled(
+                format!("{} file(s)", count),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]);
+
+        let row_area = Rect {
+            x: legend_area.x,
+            y: legend_area.y + row_i as u16,
+            width: legend_area.width,
+            height: 1,
+        };
+        f.render_widget(Paragraph::new(line), row_area);
+    }
+}
+
+fn draw_stacked_bar(f: &mut Frame, app: &App, area: Rect, rows: &[(String, u64, u64)], total: u64) {
+    if area.width == 0 {
+        return;
+    }
+    let mut x = area.x;
+    let full_width = area.width as f64;
+
+    for (i, (ext, size, _)) in rows.iter().enumerate() {
+        let progress = app.anim.eased_staggered((i as u64) * 30, 320);
+        let share = (*size as f64 / total as f64) * full_width;
+        let seg_width = (share * progress as f64).round() as u16;
+        if seg_width == 0 {
+            continue;
+        }
+        let color = if ext == "other" {
+            Color::DarkGray
+        } else {
+            color_for_extension(ext)
+        };
+        let seg_area = Rect {
+            x,
+            y: area.y,
+            width: seg_width.min(area.x + area.width - x),
+            height: 1,
+        };
+        f.render_widget(Block::default().style(Style::default().bg(color)), seg_area);
+        x += seg_width;
+        if x >= area.x + area.width {
+            break;
+        }
+    }
+    let _ = DIR_COLOR; // keep import alive if unused on some cfgs
+}
+
+const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+pub fn draw_scanning(
+    f: &mut Frame,
+    path: &str,
+    elapsed_secs: f32,
+    files_seen: u64,
+    bytes_seen: u64,
+) {
+    let area = f.size();
+    let frame_idx = ((elapsed_secs * 12.5) as usize) % SPINNER_FRAMES.len();
+    let spinner = SPINNER_FRAMES[frame_idx];
+
+    let glow_t = ((elapsed_secs * 1.4).sin() * 0.5 + 0.5).clamp(0.0, 1.0);
+    let border_color = lerp_color(Color::Rgb(60, 90, 140), Color::Rgb(100, 160, 230), glow_t);
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title("File Types (recursive breakdown of current folder)");
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+        .border_style(Style::default().fg(border_color))
+        .title(" wiztree-rs — scanning ");
 
-    if node.children.is_empty() {
-        let msg = if node.readable {
-            "(empty directory)"
-        } else {
-            "(permission denied)"
-        };
-        let p = Paragraph::new(msg).style(Style::default().fg(Color::DarkGray));
-        f.render_widget(p, inner);
-        return;
-    }
+    let text = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  {spinner}  Scanning {path}"),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!(
+                "  {} files  ·  {} scanned  ·  {:.1}s elapsed",
+                files_seen,
+                format_size(bytes_seen, DECIMAL),
+                elapsed_secs
+            ),
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Esc/q to cancel",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
 
-    let mut stats: HashMap<String, (u64, u64)> = HashMap::new();
-    collect_extension_stats(node, &mut stats);
-
-    if stats.is_empty() {
-        let p = Paragraph::new("(no files found)").style(Style::default().fg(Color::DarkGray));
-        f.render_widget(p, inner);
-        return;
-    }
-
-    let mut rows: Vec<(String, u64, u64)> = stats
-        .into_iter()
-        .map(|(ext, (size, count))| (ext, size, count))
-        .collect();
-    rows.sort_by(|a, b| b.1.cmp(&a.1));
-    rows.truncate(MAX_TYPE_ROWS);
-
-    let total: u64 = rows.iter().map(|r| r.1).sum::<u64>().max(1);
-
-    let items: Vec<ListItem> = rows
-        .iter()
-        .map(|(ext, size, count)| {
-            let pct = *size as f64 / total as f64 * 100.0;
-            let filled = ((pct / 100.0) * BAR_WIDTH as f64).round() as usize;
-            let filled = filled.min(BAR_WIDTH);
-            let bar = format!("{}{}", "#".repeat(filled), "-".repeat(BAR_WIDTH - filled));
-
-            let label = if ext == "(no extension)" {
-                ext.clone()
-            } else {
-                format!(".{}", ext.to_lowercase())
-            };
-
-            let line = Line::from(vec![
-                Span::styled(
-                    format!("{:>6.1}% ", pct),
-                    Style::default().fg(Color::Yellow),
-                ),
-                Span::styled(format!("[{}] ", bar), Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    format!("{:>10} ", format_size(*size, DECIMAL)),
-                    Style::default().fg(Color::Green),
-                ),
-                Span::styled(
-                    format!("{:>9} file(s)  ", format_count(*count)),
-                    Style::default().fg(Color::Magenta),
-                ),
-                Span::styled(
-                    label,
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ]);
-            ListItem::new(line)
-        })
-        .collect();
-
-    f.render_widget(List::new(items), inner);
-}
-
-fn format_ago(t: SystemTime) -> String {
-    match SystemTime::now().duration_since(t) {
-        Ok(d) => {
-            let secs = d.as_secs();
-            if secs < 60 {
-                "just now".to_string()
-            } else if secs < 3600 {
-                format!("{}m ago", secs / 60)
-            } else if secs < 86_400 {
-                format!("{}h ago", secs / 3600)
-            } else if secs < 86_400 * 30 {
-                format!("{}d ago", secs / 86_400)
-            } else if secs < 86_400 * 365 {
-                format!("{}mo ago", secs / (86_400 * 30))
-            } else {
-                format!("{}y ago", secs / (86_400 * 365))
-            }
-        }
-        Err(_) => "just now".to_string(),
-    }
+    let p = Paragraph::new(text).block(block);
+    f.render_widget(p, area);
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let base =
-        "↑/↓ move   →/Enter open   ←/Backspace back   s sort   t types/map   r rescan   q quit";
+        "↑/↓ move · →/Enter open · ←/Backspace up · s sort · Tab/t panel · r rescan · q quit";
     let text = match &app.status {
         Some(s) => format!("{}   |   {}", base, s),
         None => base.to_string(),
