@@ -1,66 +1,48 @@
-# kenshi
+# Kenshi
 
-A fast, terminal-based disk usage analyzer written in Rust. Point it at any folder (or your whole drive) and instantly see what's eating up your space — browse directories, sort by size, name, or date, and see a live WizTree-style treemap of where the space actually is, all without ever leaving the terminal.
+A fast, animated disk usage analyzer for the terminal — written in Rust.
 
-Inspired by tools like WizTree and `ncdu`, built from scratch with a multi-threaded scanner and a clean [ratatui](https://github.com/ratatui-org/ratatui) interface.
-
----
-
-## Table of Contents
-
-- [Features](#features)
-- [Preview](#preview)
-- [Installation](#installation)
-- [Usage](#usage)
-- [Controls](#controls)
-- [How It Works](#how-it-works)
-- [Project Structure](#project-structure)
-- [Built With](#built-with)
-- [Known Limitations](#known-limitations)
-- [Roadmap](#roadmap)
-- [Contributing](#contributing)
-- [License](#license)
+Kenshi scans a directory once, keeps the whole tree in memory, and lets you browse it instantly: drill into folders, sort by size or name or modified time, and see where your space is actually going through a live squarified treemap and a file-type breakdown, all with smooth, tasteful motion instead of a static wall of text.
 
 ---
 
 ## Features
 
-- **Multi-threaded scanning** — walks your filesystem in parallel across the first few directory levels, so large drives scan fast instead of crawling through one file at a time.
-- **Interactive TUI** — browse your filesystem like a file explorer, right in the terminal.
-- **Nested treemap, WizTree-style** — a squarified treemap sits docked directly under the file list, showing the current folder's whole visible tree — files and subfolders, several levels deep — all at once, colored by branch and shaded by depth.
-- **Detailed treemap tiles** — every tile is labeled with its name, size, and percentage of its parent folder, plus item counts for directories or the file type for files, not just a colored box.
-- **File type breakdown** — a dedicated view (toggle with `t`) that recursively tallies every file under the current folder by extension, ranked by total size, so you can instantly see whether videos, logs, caches, or something else is eating your space.
-- **Date-aware** — every file and folder tracks when it was last touched, shown as a relative time ("3d ago", "2mo ago") right in the list, with a dedicated sort mode for surfacing what's old and forgotten.
-- **Three-way sort** — cycle between size, name, and date modified with a single keypress.
-- **Directory drill-down** — step into folders, back out, and keep exploring without re-scanning.
-- **Live rescan** — refresh the scan at any time without restarting the app.
-- **Graceful permission handling** — folders you can't read are shown, not skipped silently or crashed on.
-- **Zero external runtime dependencies** — a single compiled binary, no interpreter, no config files.
+- **Instant navigation.** The directory is scanned once up front; drilling in and out of folders afterward is pure in-memory traversal, so there's no re-scanning delay.
+- **Bounded parallel scanning.** The scanner fans out across threads for the first few directory levels, then falls back to sequential scanning deeper in the tree — fast on wide directory structures without spawning an unbounded number of threads on deep ones.
+- **Animated everything.**
+  - Directory scanning runs on a background thread while an animated splash screen shows a live spinner, a running files/bytes counter, and a pulsing border — so a big scan never looks like a frozen terminal.
+  - The file list reveals itself with a staggered, eased animation on every navigation, sort change, or panel switch.
+  - The selected row breathes with a continuous sine-wave glow, so the UI feels alive even at rest.
+  - Treemap cells pop in from their center when the view changes.
+- **Two bottom panels**, toggled instantly:
+  - **Map** — a real squarified treemap of the current directory's contents, with every cell assigned a distinct color (golden-angle spaced around the color wheel, so neighboring cells never look alike) and the selected cell clearly outlined without ever covering its own label.
+  - **Types** — an animated stacked bar and legend breaking total usage down by file extension, sharing one consistent color palette with the rest of the UI.
+- **Three sort modes** — size, name, and last-modified — each shown with a human-readable relative age ("3d ago") when the terminal is wide enough.
+- **Zero unsafe surprises.** Unreadable directories are shown as such instead of crashing the scan; symlinked directories are never followed, avoiding cycles and double-counted sizes.
 
 ---
 
 ## Preview
 
 ```
-┌ Kenshi by phantekzy — disk usage (sorted by size) ────────────────────────┐
-│ / / home / phantekzy    12 item(s)    48.2 GB total                       │
-└─────────────────────────────────────────────────────────────────────────┘
-┌ Contents (Enter: open dir, Backspace: up) ────────────────────────────────┐
-│  42.1% [########------------] 20.3 GB   3d ago  [D] Downloads            │
-│> 28.7% [#####---------------] 13.8 GB   2h ago  [D] .cache               │
-│  15.2% [###-----------------]  7.3 GB  12d ago  [D] Projects             │
-│   9.4% [##-------------------]  4.5 GB   1mo ago [D] Videos              │
-│   4.6% [#---------------------]  2.3 GB   6mo ago [F] backup.tar.gz       │
-└─────────────────────────────────────────────────────────────────────────┘
-┌ Map (Enter: open dir, Backspace: up) ──────────────────────────────────────┐
-│ ╔═[D] Downloads — 20.3 GB (42%)══╗ [D] .cache — 13.8 GB (29%)             │
-│ ║ [D] movies — 12.1 GB (60%)     ║ [D] Projects — 7.3 GB (15%)            │
-│ ║  [D] setup.exe — 3.2 GB (16%)  ║ [D] Videos — 4.5 GB (9%)               │
-│ ╚═════════════════════════════════╝ [F] backup.tar.gz — 2.3 GB (5%)      │
-└─────────────────────────────────────────────────────────────────────────┘
-┌────────────────────────────────────────────────────────────────────────┐
-│ ↑/↓ move   →/Enter open   ←/Backspace back   s sort   t types/map   ... │
-└────────────────────────────────────────────────────────────────────────┘
+┌ Kenshi — sorted by size — panel: map ──────────────────────────────────────┐
+│ Projects / kenshi    12 item(s)    4.82 GB total                           │
+└──────────────────────────────────────────────────────────────────────────┘
+┌ Contents — Enter open · Backspace up ──────────────────────────────────────┐
+│    41.2% [########----------]     1.99 GB [D] target        2h ago         │
+│>   18.7% [####--------------]     902 MB  [D] .git           1d ago        │
+│    12.1% [###---------------]     583 MB  [D] node_modules    5d ago       │
+│     ...                                                                    │
+└──────────────────────────────────────────────────────────────────────────┘
+┌ Map — Tab: switch panel ───────────────────────────────────────────────────┐
+│ target/                                          ┌──────────┐              │
+│ 1.99 GB                                          │ .git/    │              │
+│                                                   │ 902 MB   │              │
+│                                                   └──────────┘              │
+└──────────────────────────────────────────────────────────────────────────┘
+│ ↑/↓ move · →/Enter open · ←/Backspace up · s sort · Tab/t panel · r rescan │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -69,179 +51,124 @@ Inspired by tools like WizTree and `ncdu`, built from scratch with a multi-threa
 
 ### Prerequisites
 
-You'll need the Rust toolchain installed. If you don't have it yet:
+- [Rust](https://www.rust-lang.org/tools/install) (stable toolchain)
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.org | sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-### Build From Source
+### Build from source
 
 ```bash
-git clone https://github.com/yourusername/kenshi.git
+git clone https://github.com/<your-username>/kenshi.git
 cd kenshi
 cargo build --release
 ```
 
-The compiled binary will be at `target/release/kenshi`.
+The compiled binary will be at `target/release/wiztree-rs`.
 
-### Install To PATH
-
-Installing puts a plain `kenshi` command on your system, so you can run it from anywhere the same way you'd run `btop` or `ncdu`:
-
-```bash
-cargo install --path .
-```
-
-Make sure `~/.cargo/bin` is on your `PATH` (rustup usually sets this up automatically). After that:
-
-```bash
-kenshi ~
-```
-
-Whenever you pull new changes or edit the source yourself, reinstall to pick them up:
-
-```bash
-cargo install --path . --force
-```
-
-`cargo run` always builds fresh from source without touching the installed copy, which is a quick way to sanity-check changes before reinstalling:
-
-```bash
-cargo run --release -- ~
-```
+> **Tip:** always build with `--release`. Kenshi's animations and large-directory scans are noticeably smoother optimized than in debug mode.
 
 ---
 
 ## Usage
 
-### Scan The Current Directory
-
 ```bash
-kenshi
+# Scan the current directory
+./target/release/wiztree-rs
+
+# Scan a specific path
+./target/release/wiztree-rs /path/to/scan
 ```
 
-### Scan A Specific Directory
+### Keybindings
 
-```bash
-kenshi /path/to/folder
-```
-
-### Scan The Entire Filesystem
-
-Run with elevated permissions for a complete picture:
-
-```bash
-sudo kenshi /
-```
-
-> **Note:** without `sudo`, directories you don't have read access to will show up as "permission denied" with 0 bytes counted, since the scanner can't look inside them.
+| Key                     | Action                          |
+|--------------------------|----------------------------------|
+| `↑` / `↓` or `j` / `k`   | Move selection                  |
+| `→` / `Enter` / `l`      | Open selected directory         |
+| `←` / `Backspace` / `h`  | Go up one level                 |
+| `Page Up` / `Page Down`  | Jump 10 rows                    |
+| `s`                      | Cycle sort: size → name → modified |
+| `Tab` / `t`               | Toggle bottom panel: Map ↔ Types |
+| `r`                       | Rescan the current root         |
+| `q` / `Esc`               | Quit (or cancel an in-progress scan) |
 
 ---
 
-## Controls
-
-| Key                      | Action                                    |
-|---------------------------|--------------------------------------------|
-| `↑` / `k`                 | Move selection up                         |
-| `↓` / `j`                 | Move selection down                       |
-| `Page Up`                 | Jump up 10 items                          |
-| `Page Down`               | Jump down 10 items                        |
-| `→` / `Enter` / `l`       | Open selected directory                   |
-| `←` / `Backspace` / `h`   | Go back to parent directory               |
-| `s`                       | Cycle sort mode (size → name → date)      |
-| `t` / `Tab`               | Toggle bottom panel (treemap ↔ file types) |
-| `r`                       | Rescan the current path                   |
-| `q` / `Esc`               | Quit                                      |
-
----
-
-## How It Works
+## How it works
 
 ### Scanning
 
-kenshi walks the directory tree starting from the given path. For each directory, it reads its entries and recursively scans them. To keep things fast on large trees, it spawns worker threads for the first few levels of depth (`MAX_PARALLEL_DEPTH`), then falls back to sequential scanning deeper in the tree — this keeps parallelism useful without spawning thousands of threads for huge, deeply nested directory structures. A thread cap (`MAX_LIVE_THREADS`) prevents runaway thread spawning on very wide directories.
+`tree::DirNode::scan` walks the filesystem recursively, building a tree where every directory's `size` is the recursive sum of its children. To keep large trees fast without spawning thousands of OS threads, parallelism is bounded two ways:
 
-Symlinks are recorded but never followed, which avoids infinite loops from circular links and matches how most disk usage tools report space (they count the link itself, not its target).
+- **Depth cutoff** — only the first few levels of the tree fan out across threads (`MAX_PARALLEL_DEPTH`); everything deeper scans sequentially within its parent's thread.
+- **Live thread cap** — a global atomic counter (`MAX_LIVE_THREADS`) prevents runaway thread spawning on unusually wide directories.
 
-Each entry's last-modified timestamp is also captured during the scan: files keep their own timestamp, and directories inherit the most recent timestamp found anywhere inside them — so a folder's "modified" time reflects the last time anything actually changed within it.
+Symlinked directories are detected via `symlink_metadata` and never traversed, which avoids both infinite cycles and inflated size totals.
 
-### Sizes
+While the scan runs, two atomic counters (`SCAN_FILES_SEEN`, `SCAN_BYTES_SEEN`) are updated live and read by the splash screen, so the "N files · M scanned" counter on screen reflects real progress, not a fake animation.
 
-Each directory's size is the sum of its children's sizes, computed bottom-up as the scan completes. File counts are aggregated the same way.
+### Animation
 
-### The Treemap
+All motion in Kenshi is driven by a small, deliberately **stateless** clock (`anim::Animation`). Rather than mutating a progress value every frame, it stores only a start time and computes progress on demand from elapsed wall-clock time:
 
-The bottom panel renders a squarified treemap (the same layout family WizTree and `ncdu --map` use) via a custom algorithm in `treemap.rs`, based on the Bruls/Huizing/van Wijk squarify method — it keeps tiles close to a 1:1 aspect ratio instead of producing thin, unreadable slivers.
-
-Unlike a flat single-level treemap, kenshi's map is recursive: any folder tile that's both large enough on screen and within a depth limit gets its own children laid out *inside* its borders, so the whole visible tree — several levels deep — renders at once instead of requiring you to drill in level by level.
-
-### File Type Breakdown
-
-Pressing `t` switches the bottom panel to a recursive walk of every file under the current folder, tallying total size and count per extension, then ranking them by size — the same category-of-space-usage view TreeSize and WizTree both dedicate a tab to.
-
-### Rendering
-
-The interface is built with [ratatui](https://github.com/ratatui-org/ratatui) and [crossterm](https://github.com/crossterm-rs/crossterm), rendering a header (current path + totals), the file list, the treemap or file-types panel underneath it, and a footer with keybindings.
-
----
-
-## Project Structure
-
-```
-src/
-├── main.rs      — CLI argument parsing, terminal setup/teardown, event loop
-├── tree.rs      — filesystem scanning logic (DirNode, multi-threaded walk, modified-time tracking)
-├── app.rs       — application state, navigation, sorting, panel toggling
-├── treemap.rs   — squarified treemap layout algorithm (pure geometry, no rendering)
-└── ui.rs        — rendering: list view, nested treemap, file-type breakdown, layout
+```rust
+pub fn eased(&self) -> f32 {
+    ease_out_cubic(self.linear())
+}
 ```
 
----
+This keeps the render loop pure — every frame is a fresh, deterministic function of "how long has it been," with no animation state to get out of sync. Restarting an animation (on navigation, sort, or panel switch) is just replacing the clock with a new one. A companion `Pulse` type drives continuous, never-ending effects (like the selection glow) off a sine wave for the same reason.
 
-## Built With
+### The treemap
 
-- [Rust](https://www.rust-lang.org/)
-- [ratatui](https://github.com/ratatui-org/ratatui) — terminal UI framework
-- [crossterm](https://github.com/crossterm-rs/crossterm) — cross-platform terminal manipulation
-- [clap](https://github.com/clap-rs/clap) — command-line argument parsing
-- [humansize](https://github.com/LeopoldArkham/humansize) — human-readable byte formatting
+The **Map** panel implements the [squarified treemap](https://www.win.tue.nl/~vanwijk/stm.pdf) algorithm: it recursively lays out rectangles to keep aspect ratios close to square, which is what makes a treemap readable instead of a strip of slivers. Each cell is assigned a distinct color using **golden-angle hue spacing** around the color wheel — stepping by ~137.5° per item — rather than an even `360° / N` split. An even split puts adjacent items at nearly identical hues once you have more than a handful of entries; the golden angle guarantees strong contrast between neighbors regardless of how many cells are on screen.
+
+Selection highlighting draws the border **before** placing the label inside its inset area, so the border glyphs and the text never occupy the same cell — a small but deliberate ordering fix to keep labels fully legible even when selected.
 
 ---
 
-## Known Limitations
+## Testing
 
-- Virtual filesystems (`/proc`, `/sys`, `/dev`) are scanned like regular directories, so they'll appear in results even though their "sizes" aren't meaningful disk usage.
-- The file type breakdown recomputes on every redraw while that panel is open — fine for most folders, but on a folder with millions of files it can add noticeable CPU while the panel stays open. Caching the result per-folder would fix this.
-- No file-deletion feature yet — kenshi is read-only by design, for now.
+Kenshi is validated at three levels:
+
+1. **Unit checks** against the treemap math (single-item layouts fill their full area, empty/zero-size inputs don't panic, large item sets cover ~100% of the available cells) and the file-type aggregation (extension totals match known byte counts exactly).
+2. **Buffer-level render checks** using `ratatui`'s `TestBackend` to render real frames and assert on the exact characters and colors produced — used to confirm, for example, that the selection border and its label no longer overlap, and that neighboring treemap cells get visibly different colors.
+3. **End-to-end interactive testing** by driving the compiled binary inside a pseudo-terminal through full sessions — navigation, sorting, panel switching, rescanning, a mid-scan cancel, and a scan of a large real directory tree with permission-restricted subfolders — checking for clean exits and zero panics.
+
+---
+
+## Project structure
+
+```
+kenshi/
+├── Cargo.toml
+└── src/
+    ├── main.rs      — CLI args, terminal setup/teardown, scan splash, event loop
+    ├── tree.rs       — recursive filesystem scanner (bounded-parallel)
+    ├── treemap.rs    — squarified treemap layout algorithm
+    ├── app.rs        — navigation state (drill in/out, sort, panel, animation triggers)
+    ├── ui.rs          — rendering: list, map, types panel, scan splash
+    ├── anim.rs        — stateless animation clock and easing functions
+    └── colors.rs      — extension-based and index-based color assignment
+```
 
 ---
 
 ## Roadmap
 
-- [ ] Cache file-type breakdown results per folder instead of recomputing every frame
-- [ ] Skip/flag virtual filesystems automatically
-- [ ] File deletion / cleanup actions from within the TUI
-- [ ] Export scan results (JSON/CSV)
-- [ ] Search/filter within the current view
-- [ ] Mouse support — click a treemap tile to select it
-- [ ] Config file for default scan path and keybindings
-
----
-
-## Contributing
-
-Issues and pull requests are welcome. If you're adding a feature, please keep the scanning logic (`tree.rs`), the layout math (`treemap.rs`), and the rendering (`ui.rs`) decoupled from each other — that separation is what keeps the app easy to reason about.
-
-### Steps
-
-1. Fork the repo
-2. Create a feature branch (`git checkout -b feature/my-feature`)
-3. Commit your changes
-4. Push and open a pull request
+- [ ] Delete files/folders directly from the UI (with confirmation)
+- [ ] Mouse support for the treemap panel
+- [ ] Export a scan as JSON/CSV
+- [ ] Configurable color themes
 
 ---
 
 ## License
 
-MIT — do whatever you want with it, just don't hold me liable if it tells you your disk is full when it isn't.
+MIT — see [`LICENSE`](LICENSE) for details.
+
+## Contributing
+
+Issues and pull requests are welcome. If you're proposing a UI change, a quick before/after in the description goes a long way — terminal screenshots are hard to review in the abstract.
