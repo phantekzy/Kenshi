@@ -1,4 +1,7 @@
 use crate::tree::DirNode;
+use crate::heuristics::CleanupFinding;
+
+
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SortMode {
@@ -11,6 +14,7 @@ pub enum SortMode {
 pub enum BottomPanel {
     Map,
     Types,
+    Cleanup,
 }
 
 pub struct App {
@@ -21,10 +25,12 @@ pub struct App {
     pub sort_mode: SortMode,
     pub bottom_panel: BottomPanel,
     pub status: Option<String>,
+    pub cleanup_findings: Vec<CleanupFinding>,
 }
 
 impl App {
     pub fn new(root: DirNode) -> Self {
+        let cleanup_findings = crate::heuristics::scan(&root);
         Self {
             root,
             nav_stack: Vec::new(),
@@ -33,6 +39,7 @@ impl App {
             sort_mode: SortMode::Size,
             bottom_panel: BottomPanel::Map,
             status: None,
+            cleanup_findings,
         }
     }
 
@@ -125,7 +132,8 @@ impl App {
     pub fn toggle_bottom_panel(&mut self) {
         self.bottom_panel = match self.bottom_panel {
             BottomPanel::Map => BottomPanel::Types,
-            BottomPanel::Types => BottomPanel::Map,
+            BottomPanel::Types => BottomPanel::Cleanup,
+            BottomPanel::Cleanup => BottomPanel::Map,
         };
     }
 }

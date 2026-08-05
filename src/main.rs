@@ -2,6 +2,7 @@ mod app;
 mod tree;
 mod treemap;
 mod ui;
+mod heuristics;
 
 use app::App;
 use clap::Parser;

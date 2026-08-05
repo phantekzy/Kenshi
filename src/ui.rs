@@ -11,6 +11,7 @@ use ratatui::{
 };
 use std::collections::HashMap;
 use std::time::SystemTime;
+use crate::heuristics::{reclaimable_bytes, Category};
 
 const BAR_WIDTH: usize = 20;
 
@@ -36,6 +37,7 @@ pub fn draw(f: &mut Frame, app: &App, list_state: &mut ListState) {
     match app.bottom_panel {
         crate::app::BottomPanel::Map => draw_map(f, app, panels[1]),
         crate::app::BottomPanel::Types => draw_types(f, app, panels[1]),
+        crate::app::BottomPanel::Cleanup => draw_cleanup(f, app, panels[1]),
     }
 
     draw_footer(f, app, outer[2]);
@@ -495,6 +497,65 @@ fn draw_types(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(List::new(items), inner);
 }
 
+fn draw_cleanup(f: &mut Frame, app: &App, area: Rect) {
+    let reclaimable = reclaimable_bytes(&app.cleanup_findings);
+    let title = format!(
+        "Cleanup Candidates - {} reclaimable",
+        format_size(reclaimable, DECIMAL)
+    );
+    let block= Block::default().borders(Borders::ALL).title(title);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if app.cleanup_findings.is_empty() {
+        let p = Paragraph::new("(no Known build artificats, caches, or temp folders found)").style(Style::default().fg(Color::DarkGray));
+        f.render_widget(p, inner);
+        return;
+    }
+    
+    let mut findings = app.cleanup_findings.iter().collect::<Vec<_>>();
+    findings.sort_by(|a, b| b.size.cmp(&a.size));
+
+    let items: Vec<ListItem> = findings
+        .iter()
+        .map(|finding| {
+            let label = category_label(finding.category);
+            let line = Line::from(vec![
+                Span::styled(
+                    format!("{:>10} ", format_size(finding.size, DECIMAL)),
+                    Style::default().fg(Color::Green),
+                ),
+                Span::styled(
+                    format!("{:>9} file(s)  ", format_count(finding.file_count)),
+                    Style::default().fg(Color::Magenta),
+                ),
+                Span::styled(
+                    format!("[{}] ", label),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(finding.name.clone(), Style::default().fg(Color::White)),
+                Span::styled(
+                    format!(" - {}", finding.category.description()),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(
+                    format!(" ({})", finding.path.display()),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]);
+            ListItem::new(line)
+        })
+        .collect();
+    f.render_widget(List::new(items), inner);
+}
+
+fn category_label(category: Category) -> &'static str {
+    category.label()
+}
+
+
 fn format_ago(t: SystemTime) -> String {
     match SystemTime::now().duration_since(t) {
         Ok(d) => {
@@ -519,7 +580,7 @@ fn format_ago(t: SystemTime) -> String {
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let base =
-        "↑/↓ move   →/Enter open   ←/Backspace back   s sort   t types/map   r rescan   q quit";
+        "↑/↓ move   →/Enter open   ←/Backspace back   s sort   t cycle panel   r rescan   q quit";
     let text = match &app.status {
         Some(s) => format!("{}   |   {}", base, s),
         None => base.to_string(),
