@@ -1,5 +1,5 @@
 use crate::app::{App, BottomPanel, SortMode};
-use crate::colors::{color_for_entry, color_for_extension, lerp_color, DIR_COLOR};
+use crate::colors::{color_for_entry, color_for_extension, color_for_index, lerp_color, DIR_COLOR};
 use crate::treemap;
 use humansize::{format_size, DECIMAL};
 use ratatui::{
@@ -230,6 +230,7 @@ fn draw_map(f: &mut Frame, app: &App, area: Rect) {
     let rects = treemap::layout(&sizes, inner);
     let progress = app.anim.eased();
     let glow = lerp_color(Color::White, Color::Yellow, app.pulse.wave(900));
+    let n = node.children.len();
 
     for (i, (c, target)) in node.children.iter().zip(rects.iter()).enumerate() {
         let rect = animate_rect(*target, progress);
@@ -237,34 +238,64 @@ fn draw_map(f: &mut Frame, app: &App, area: Rect) {
             continue;
         }
 
-        let bg = color_for_entry(&c.name, c.is_dir);
+        // Every cell gets its own distinct color (spread around the
+        // wheel by position) instead of a color shared by type, so
+        // adjacent folders/files never blend together.
+        let bg = color_for_index(i, n);
         let text_fg = if is_light(bg) {
             Color::Black
         } else {
             Color::White
         };
+        let is_selected = i == app.selected;
+        let can_border = rect.width >= 3 && rect.height >= 3;
 
-        let label = if rect.height >= 2 && rect.width >= 4 {
+        // Draw the selection border FIRST, then place the label in
+        // the space *inside* it — otherwise the border glyphs get
+        // painted on top of the text and eat the first/last
+        // character. When the cell is too small to spare a ring for
+        // a border, fall back to reversed colors instead so the
+        // selection is still visible without covering anything.
+        let content_rect = if is_selected && can_border {
+            let border = Block::default()
+                .borders(Borders::ALL)
+                .style(Style::default().bg(bg))
+                .border_style(Style::default().fg(glow).add_modifier(Modifier::BOLD));
+            let content = border.inner(rect);
+            f.render_widget(border, rect);
+            content
+        } else {
+            rect
+        };
+
+        let display_name = if c.is_dir {
+            format!("{}/", c.name)
+        } else {
+            c.name.clone()
+        };
+
+        let label = if content_rect.height >= 2 && content_rect.width >= 4 {
             format!(
                 "{}\n{}",
-                truncate(&c.name, rect.width as usize),
-                truncate(&format_size(c.size, DECIMAL), rect.width as usize)
+                truncate(&display_name, content_rect.width as usize),
+                truncate(&format_size(c.size, DECIMAL), content_rect.width as usize)
             )
-        } else if rect.height >= 1 && rect.width >= 3 {
-            truncate(&c.name, rect.width as usize)
+        } else if content_rect.height >= 1 && content_rect.width >= 3 {
+            truncate(&display_name, content_rect.width as usize)
         } else {
             String::new()
         };
 
-        let p = Paragraph::new(label).style(Style::default().fg(text_fg).bg(bg));
-        f.render_widget(p, rect);
+        let text_style = if is_selected && !can_border {
+            // No room for a border: invert instead, so the cue never
+            // costs us the one cell of text a tiny box has.
+            Style::default().fg(bg).bg(text_fg)
+        } else {
+            Style::default().fg(text_fg).bg(bg)
+        };
 
-        if i == app.selected && rect.width >= 3 && rect.height >= 3 {
-            let border = Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(glow).add_modifier(Modifier::BOLD));
-            f.render_widget(border, rect);
-        }
+        let p = Paragraph::new(label).style(text_style);
+        f.render_widget(p, content_rect);
     }
 }
 
